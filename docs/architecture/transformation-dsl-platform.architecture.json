@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Transformation DSL Platform",
+    "subtitle": "Independent YAML control plane, Airflow orchestration, and plug-in data plane",
+    "output": "docs/architecture/transformation-dsl-platform.html",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "request-to-plan",
+        "label": "Request to immutable plan",
+        "focus": ["clients", "gateway", "api", "compiler", "catalog", "run_store"],
+        "note": "Follow a versioned YAML definition through validation and plan persistence."
+      },
+      {
+        "id": "durable-execution",
+        "label": "Durable execution",
+        "focus": ["api", "airflow", "runner", "datasources", "engines", "artifacts", "run_store"],
+        "note": "Airflow schedules stable run references; workers keep large data out of the control plane."
+      },
+      {
+        "id": "extension-points",
+        "label": "Extension points",
+        "focus": ["compiler", "registry", "runner", "datasources", "engines"],
+        "note": "Entry-point plug-ins add vendors and engines without coupling them to the DSL compiler."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "Client Services",
+      "sublabel": "YAML + run requests",
+      "pos": [38, 310],
+      "size": [130, 62]
+    },
+    {
+      "id": "gateway",
+      "type": "security",
+      "label": "API Gateway",
+      "sublabel": "identity + quotas",
+      "pos": [220, 310],
+      "size": [130, 62],
+      "tag": "platform"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "stateless control API",
+      "pos": [405, 310],
+      "size": [135, 62],
+      "tag": "control plane"
+    },
+    {
+      "id": "compiler",
+      "type": "backend",
+      "label": "DSL Compiler",
+      "sublabel": "safe YAML → plan",
+      "pos": [600, 310],
+      "size": [140, 62],
+      "tag": "control plane"
+    },
+    {
+      "id": "registry",
+      "type": "backend",
+      "label": "Plug-in Registry",
+      "sublabel": "entry-point discovery",
+      "pos": [600, 105],
+      "size": [140, 62],
+      "tag": "control plane"
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Workflow Catalog",
+      "sublabel": "versions + plans",
+      "pos": [600, 520],
+      "size": [140, 62],
+      "tag": "data team"
+    },
+    {
+      "id": "airflow",
+      "type": "external",
+      "label": "Apache Airflow",
+      "sublabel": "durable scheduler",
+      "pos": [805, 310],
+      "size": [140, 62],
+      "tag": "orchestration"
+    },
+    {
+      "id": "run_store",
+      "type": "database",
+      "label": "Run Metadata",
+      "sublabel": "state + idempotency",
+      "pos": [805, 520],
+      "size": [140, 62],
+      "tag": "data team"
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "Plan Runner",
+      "sublabel": "isolated workers",
+      "pos": [1015, 310],
+      "size": [140, 62],
+      "tag": "data plane"
+    },
+    {
+      "id": "datasources",
+      "type": "external",
+      "label": "Datasource Plug-ins",
+      "sublabel": "DBs + lake + blob",
+      "pos": [1015, 105],
+      "size": [145, 62],
+      "tag": "data plane"
+    },
+    {
+      "id": "engines",
+      "type": "backend",
+      "label": "Engine Plug-ins",
+      "sublabel": "Spark / local frames",
+      "pos": [1015, 520],
+      "size": [145, 62],
+      "tag": "data plane"
+    },
+    {
+      "id": "artifacts",
+      "type": "cloud",
+      "label": "Artifact Store",
+      "sublabel": "plans + outputs + logs",
+      "pos": [1225, 310],
+      "size": [145, 62],
+      "tag": "data plane"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Control plane — metadata only",
+      "wraps": ["api", "compiler", "registry", "catalog", "run_store"]
+    },
+    {
+      "kind": "region",
+      "label": "Data plane — isolated compute and credentials",
+      "wraps": ["runner", "datasources", "engines", "artifacts"]
+    }
+  ],
+  "connections": [
+    {
+      "from": "clients",
+      "to": "gateway",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gateway",
+      "to": "api",
+      "label": "authenticated",
+      "variant": "security",
+      "labelAt": [378, 306]
+    },
+    {
+      "from": "api",
+      "to": "compiler",
+      "label": "validate / compile",
+      "variant": "emphasis",
+      "labelAt": [570, 306]
+    },
+    {
+      "from": "compiler",
+      "to": "catalog",
+      "label": "immutable plan",
+      "route": "orthogonal-v"
+    },
+    {
+      "from": "api",
+      "to": "airflow",
+      "label": "submit run ID",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [[472, 270], [875, 270]]
+    },
+    {
+      "from": "api",
+      "to": "run_store",
+      "label": "run state",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [[472, 450], [765, 450], [765, 551]]
+    },
+    {
+      "from": "airflow",
+      "to": "runner",
+      "label": "schedule",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runner",
+      "to": "datasources",
+      "label": "read / write",
+      "route": "orthogonal-v"
+    },
+    {
+      "from": "runner",
+      "to": "engines",
+      "label": "execute step",
+      "route": "orthogonal-v"
+    },
+    {
+      "from": "runner",
+      "to": "artifacts",
+      "label": "DatasetRef + evidence",
+      "variant": "emphasis",
+      "labelAt": [1190, 306]
+    },
+    {
+      "from": "runner",
+      "to": "run_store",
+      "label": "step status",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [[1085, 450], [970, 450], [970, 551]]
+    },
+    {
+      "from": "registry",
+      "to": "compiler",
+      "label": "allowed functions",
+      "variant": "dashed",
+      "route": "orthogonal-v"
+    },
+    {
+      "from": "registry",
+      "to": "runner",
+      "label": "adapter factories",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[780, 136], [780, 225], [1085, 225], [1085, 270]],
+      "labelAt": [930, 218]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Stable orchestration",
+      "items": [
+        "Airflow receives workflow and run identifiers",
+        "Uploaded YAML does not become a new Python DAG",
+        "Immutable plan fingerprints make runs reproducible"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Portable extension layer",
+      "items": [
+        "Domain ports isolate framework and vendor SDKs",
+        "Entry points install engines and datasources independently",
+        "DatasetRef metadata prevents control-plane data transfer"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Security boundaries",
+      "items": [
+        "YAML is parsed data and never passed to eval",
+        "Connection names refer to externally managed secrets",
+        "Heavy compute and credentials stay in isolated workers"
+      ]
+    }
+  ]
+}
