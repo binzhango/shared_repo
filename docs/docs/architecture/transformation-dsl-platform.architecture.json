@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Portable Transformation DSL Platform",
+    "subtitle": "Canonical plan, Airflow orchestration, switchable DAG runtimes, and reusable common adapters",
+    "output": "docs/architecture/transformation-dsl-platform.html",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "portable-plan",
+        "label": "YAML to portable plan",
+        "focus": ["clients", "api", "compiler", "plan", "metadata"],
+        "note": "The compiler owns DSL semantics and emits one framework-neutral execution plan."
+      },
+      {
+        "id": "airflow-hamilton",
+        "label": "Airflow with Hamilton",
+        "focus": ["plan", "airflow", "runner", "runtime", "artifacts"],
+        "note": "Airflow schedules the run; the selected DAG runtime lowers and executes the canonical plan."
+      },
+      {
+        "id": "reusable-adapters",
+        "label": "Reusable adapter library",
+        "focus": ["catalog", "runtime", "data_adapters", "data_systems"],
+        "note": "Common runtimes, engines, and datasources ship as reusable modules in one distribution."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "clients",
+      "type": "external",
+      "label": "Client Services",
+      "sublabel": "portable YAML",
+      "pos": [38, 310],
+      "size": [130, 62]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "stateless control API",
+      "pos": [220, 310],
+      "size": [135, 62],
+      "tag": "delivery module"
+    },
+    {
+      "id": "compiler",
+      "type": "backend",
+      "label": "DSL Compiler",
+      "sublabel": "semantics + validation",
+      "pos": [410, 310],
+      "size": [145, 62],
+      "tag": "shared library"
+    },
+    {
+      "id": "plan",
+      "type": "messagebus",
+      "label": "Canonical Plan",
+      "sublabel": "framework-neutral IR",
+      "pos": [610, 310],
+      "size": [145, 62],
+      "tag": "shared contract"
+    },
+    {
+      "id": "airflow",
+      "type": "external",
+      "label": "Apache Airflow",
+      "sublabel": "macro-orchestrator",
+      "pos": [810, 310],
+      "size": [140, 62],
+      "tag": "existing service"
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "Plan Runner",
+      "sublabel": "isolated worker",
+      "pos": [1010, 310],
+      "size": [140, 62],
+      "tag": "data plane"
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "DAG Runtime Adapter",
+      "sublabel": "Hamilton / native / future",
+      "pos": [1210, 310],
+      "size": [150, 62],
+      "tag": "shared library"
+    },
+    {
+      "id": "data_adapters",
+      "type": "backend",
+      "label": "Common Data Adapters",
+      "sublabel": "engines + datasources",
+      "pos": [1415, 310],
+      "size": [155, 62],
+      "tag": "shared library"
+    },
+    {
+      "id": "data_systems",
+      "type": "external",
+      "label": "Data Systems",
+      "sublabel": "DB / lake / Spark / local",
+      "pos": [1625, 310],
+      "size": [150, 62]
+    },
+    {
+      "id": "catalog",
+      "type": "cloud",
+      "label": "Adapter Catalog",
+      "sublabel": "built-ins + extensions",
+      "pos": [1210, 105],
+      "size": [150, 62],
+      "tag": "shared library"
+    },
+    {
+      "id": "metadata",
+      "type": "database",
+      "label": "Workflow + Run Store",
+      "sublabel": "versions + state",
+      "pos": [220, 520],
+      "size": [145, 62],
+      "tag": "control plane"
+    },
+    {
+      "id": "artifacts",
+      "type": "cloud",
+      "label": "Artifact Store",
+      "sublabel": "plans + outputs + logs",
+      "pos": [1010, 520],
+      "size": [145, 62],
+      "tag": "data plane"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Control plane — YAML and metadata only",
+      "wraps": ["api", "compiler", "plan", "metadata"]
+    },
+    {
+      "kind": "region",
+      "label": "Data plane — isolated execution and credentials",
+      "wraps": ["runner", "runtime", "data_adapters", "catalog", "artifacts"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "submit-yaml",
+      "from": "clients",
+      "to": "api",
+      "label": "HTTPS",
+      "variant": "emphasis",
+      "labelAt": [194, 306]
+    },
+    {
+      "id": "compile-workflow",
+      "from": "api",
+      "to": "compiler",
+      "variant": "emphasis"
+    },
+    {
+      "id": "emit-canonical-plan",
+      "from": "compiler",
+      "to": "plan",
+      "label": "canonical IR",
+      "variant": "emphasis",
+      "labelAt": [583, 306]
+    },
+    {
+      "id": "submit-run-reference",
+      "from": "plan",
+      "to": "airflow",
+      "label": "run reference",
+      "variant": "emphasis",
+      "labelAt": [782, 306]
+    },
+    {
+      "id": "schedule-runner",
+      "from": "airflow",
+      "to": "runner",
+      "label": "schedule",
+      "variant": "emphasis",
+      "labelAt": [980, 306]
+    },
+    {
+      "id": "select-runtime",
+      "from": "runner",
+      "to": "runtime",
+      "label": "execution profile",
+      "variant": "emphasis",
+      "labelAt": [1180, 306]
+    },
+    {
+      "id": "invoke-common-adapters",
+      "from": "runtime",
+      "to": "data_adapters",
+      "label": "step calls",
+      "variant": "emphasis",
+      "labelAt": [1388, 306]
+    },
+    {
+      "id": "access-data-systems",
+      "from": "data_adapters",
+      "to": "data_systems",
+      "label": "DatasetRef",
+      "variant": "emphasis",
+      "labelAt": [1598, 306]
+    },
+    {
+      "id": "persist-metadata",
+      "from": "api",
+      "to": "metadata",
+      "label": "versions + state",
+      "route": "orthogonal-v",
+      "labelAt": [287, 450]
+    },
+    {
+      "id": "persist-artifacts",
+      "from": "runner",
+      "to": "artifacts",
+      "label": "evidence",
+      "variant": "dashed",
+      "route": "orthogonal-v",
+      "labelAt": [1080, 450]
+    },
+    {
+      "id": "resolve-runtime",
+      "from": "catalog",
+      "to": "runtime",
+      "label": "resolve adapter",
+      "variant": "dashed",
+      "route": "orthogonal-v",
+      "labelAt": [1285, 240]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Portable semantics",
+      "items": [
+        "The compiler owns references, conditions, validation, and plan fingerprints",
+        "Runtime adapters lower the same canonical plan",
+        "Unsupported semantics fail capability validation"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "One reusable distribution",
+      "items": [
+        "Hamilton, Airflow, engines, and datasources are shared modules",
+        "Heavy vendor SDKs remain optional and lazy-loaded",
+        "Entry points are reserved for uncommon private extensions"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Clear runtime ownership",
+      "items": [
+        "Airflow schedules complete workflow runs",
+        "Hamilton coordinates fine-grained DAG nodes",
+        "Data engines and datasource adapters perform data operations"
+      ]
+    }
+  ]
+}
