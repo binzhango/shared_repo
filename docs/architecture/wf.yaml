@@ -1,0 +1,256 @@
+apiVersion: transform/v1
+kind: Workflow
+
+metadata:
+  name: orders_daily_rollup
+  version: "2.0.0-mvp"
+  owner: data-eng@company.com
+  description: Daily customer and regional order rollups with deduplication and currency normalization
+  tags: [orders, daily, finance]
+  labels:
+    domain: finance
+    criticality: high
+
+# Connections describe access only. Operations consume logical datasets and do
+# not need to know where those datasets are physically stored.
+connections:
+  - id: snowflake_prod
+    type: snowflake
+    account: "{{ env.SNOWFLAKE_ACCOUNT }}"
+    warehouse: ANALYTICS_WH
+    role: TRANSFORM_ROLE
+    auth:
+      secret_ref: secretsmanager://prod/snowflake/transform_role
+
+  - id: postgres_prod
+    type: postgres
+    host: "{{ env.PG_HOST }}"
+    port: 5432
+    database: app
+    auth:
+      secret_ref: secretsmanager://prod/postgres/readonly
+
+  - id: adls_raw
+    type: azure
+    account_url: "{{ env.ADLS_ACCOUNT_URL }}"
+    auth:
+      secret_ref: secretsmanager://prod/adls/sas_token
+
+  - id: databricks_prod
+    type: databricks
+    workspace_url: "{{ env.DATABRICKS_WORKSPACE_URL }}"
+    sql_warehouse_id: "{{ env.DATABRICKS_WAREHOUSE_ID }}"
+    auth:
+      secret_ref: secretsmanager://prod/databricks/token
+
+# Every source id registers a logical input dataset with the same name.
+sources:
+  - id: raw_orders
+    connection: snowflake_prod
+    object:
+      kind: table
+      name: RAW.SALES.ORDERS
+    read:
+      mode: incremental
+      cursor:
+        column: updated_at
+        lookback: 1h
+        state_key: orders_daily_rollup.raw_orders
+        commit_on: all_targets_succeeded
+    contract:
+      columns:
+        - {name: order_id, type: string, nullable: false}
+        - {name: customer_id, type: string, nullable: false}
+        - {name: currency_code, type: string, nullable: false}
+        - {name: amount, type: "decimal(18,2)", nullable: false}
+        - {name: updated_at, type: timestamp, nullable: false}
+
+  - id: raw_customers
+    connection: postgres_prod
+    object:
+      kind: query
+      query: |
+        SELECT customer_id, region, signup_date
+        FROM customers
+        WHERE active = true
+    read:
+      mode: full
+    contract:
+      columns:
+        - {name: customer_id, type: string, nullable: false}
+        - {name: region, type: string, nullable: false}
+        - {name: signup_date, type: date, nullable: true}
+
+  - id: fx_rates
+    connection: adls_raw
+    object:
+      kind: file
+      path: fx/2026/08/rates.parquet
+      format: parquet
+    read:
+      mode: full
+    contract:
+      columns:
+        - {name: currency_code, type: string, nullable: false}
+        - {name: rate_date, type: date, nullable: false}
+        - {name: usd_rate, type: "decimal(18,8)", nullable: false}
+
+# Operation dependencies are inferred only from inputs and outputs:
+# - one output consumed by several operations creates a fork;
+# - one operation consuming several outputs creates a join.
+operations:
+  - id: deduplicate_orders
+    type: deduplicate
+    inputs:
+      dataset: raw_orders
+    config:
+      keys: [order_id]
+      order_by:
+        - {column: updated_at, direction: desc}
+      keep: first
+    output: deduplicated_orders
+
+  - id: select_latest_fx_rates
+    type: deduplicate
+    inputs:
+      dataset: fx_rates
+    config:
+      keys: [currency_code]
+      order_by:
+        - {column: rate_date, direction: desc}
+      keep: first
+    output: latest_fx_rates
+
+  - id: attach_fx_rates
+    type: join
+    inputs:
+      left: deduplicated_orders
+      right: latest_fx_rates
+    config:
+      how: left
+      join_on:
+        - {left: currency_code, right: currency_code}
+      cardinality: many_to_one
+    output: orders_with_fx
+
+  - id: normalize_orders
+    type: map
+    inputs:
+      dataset: orders_with_fx
+    config:
+      expressions:
+        amount_usd: "amount * usd_rate"
+        order_date: "cast(updated_at as date)"
+    output: normalized_orders
+    validation:
+      - rule: not_null
+        columns: [order_id, customer_id, amount_usd, order_date]
+        on_fail: fail
+
+  - id: attach_customers
+    type: join
+    inputs:
+      left: normalized_orders
+      right: raw_customers
+    config:
+      how: left
+      join_on:
+        - {left: customer_id, right: customer_id}
+      cardinality: many_to_one
+    output: enriched_orders
+
+  # FORK: both operations consume enriched_orders and can run in parallel.
+  - id: aggregate_by_region
+    type: aggregate
+    inputs:
+      dataset: enriched_orders
+    config:
+      group_by: [region, order_date]
+      aggregations:
+        region_order_count: {function: count, column: order_id}
+        region_total_usd: {function: sum, column: amount_usd}
+    output: region_daily_orders
+
+  - id: aggregate_by_customer
+    type: aggregate
+    inputs:
+      dataset: enriched_orders
+    config:
+      group_by: [customer_id, region, order_date]
+      aggregations:
+        customer_order_count: {function: count, column: order_id}
+        customer_total_usd: {function: sum, column: amount_usd}
+    output: customer_daily_orders
+
+  # JOIN: waits for both forked branches, then combines their outputs.
+  - id: attach_region_rollup
+    type: join
+    inputs:
+      left: customer_daily_orders
+      right: region_daily_orders
+    config:
+      how: left
+      join_on:
+        - {left: region, right: region}
+        - {left: order_date, right: order_date}
+      cardinality: many_to_one
+    output: customer_region_daily_orders
+
+  - id: apply_promo_adjustment
+    type: map
+    inputs:
+      dataset: customer_region_daily_orders
+    config:
+      expressions:
+        adjusted_customer_total_usd: "customer_total_usd * 0.95"
+    output: adjusted_customer_daily_orders
+
+# Suites are reusable definitions. A target or step chooses where to execute one.
+validations:
+  - id: customer_rollup_quality
+    severity: error
+    on_fail: fail_workflow
+    expectations:
+      - expectation: not_null
+        columns: [customer_id, order_date, adjusted_customer_total_usd]
+      - expectation: unique_key
+        columns: [customer_id, order_date]
+      - expectation: values_between
+        column: adjusted_customer_total_usd
+        min: 0
+        max: 1000000
+      - expectation: row_count_between
+        min: 1
+
+  - id: region_rollup_quality
+    severity: error
+    on_fail: fail_workflow
+    expectations:
+      - expectation: unique_key
+        columns: [region, order_date]
+      - expectation: not_null
+        columns: [region, order_date, region_total_usd]
+
+targets:
+  - id: customer_daily_orders_out
+    input: adjusted_customer_daily_orders
+    connection: snowflake_prod
+    object:
+      kind: table
+      name: ANALYTICS.FINANCE.CUSTOMER_DAILY_ORDERS
+    write:
+      mode: merge
+      keys: [customer_id, order_date]
+    post_write_validation:
+      suites: [customer_rollup_quality]
+
+  - id: region_daily_orders_out
+    input: region_daily_orders
+    connection: databricks_prod
+    object:
+      kind: table
+      name: analytics.finance.region_daily_orders
+    write:
+      mode: overwrite
+    post_write_validation:
+      suites: [region_rollup_quality]
